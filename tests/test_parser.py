@@ -21,6 +21,8 @@ from lark.lark import Lark
 from lark.exceptions import GrammarError, ParseError, UnexpectedToken, UnexpectedInput, UnexpectedCharacters
 from lark.tree import Tree
 from lark.visitors import Transformer
+from lark.grammar import Rule
+from lark.lexer import TerminalDef
 
 __path__ = os.path.dirname(__file__)
 def _read(n, *args):
@@ -1099,6 +1101,23 @@ def _make_parser_test(LEXER, PARSER):
             x = l.parse('12 capybaras')
             self.assertEqual(x.children, ['12', 'capybaras'])
 
+        def test_relative_import_preserves_leading_underscore(self):
+            l = _Lark_open("test_relative_import_preserves_leading_underscore.lark", rel_to=__file__)
+            x = l.parse('Ax')
+            self.assertEqual(next(x.find_data('c')).children, ['A'])
+
+        def test_relative_import_of_nested_grammar(self):
+            l = _Lark_open("grammars/test_relative_import_of_nested_grammar.lark", rel_to=__file__)
+            x = l.parse('N')
+            self.assertEqual(next(x.find_data('rule_to_import')).children, ['N'])
+
+        def test_relative_import_rules_dependencies_imported_only_once(self):
+            l = _Lark_open("test_relative_import_rules_dependencies_imported_only_once.lark", rel_to=__file__)
+            x = l.parse('AAA')
+            self.assertEqual(next(x.find_data('a')).children, ['A'])
+            self.assertEqual(next(x.find_data('b')).children, ['A'])
+            self.assertEqual(next(x.find_data('d')).children, ['A'])
+
         def test_import_errors(self):
             grammar = """
             start: NUMBER WORD
@@ -1428,6 +1447,24 @@ def _make_parser_test(LEXER, PARSER):
             parser.parse(r'"\\" "b" "c"')
 
             parser.parse(r'"That" "And a \"b"')
+
+        @unittest.skipIf(PARSER!='lalr', "Serialize currently only works for LALR parsers (though it should be easy to extend)")
+        def test_serialize(self):
+            grammar = """
+                start: _ANY b "C"
+                _ANY: /./
+                b: "B"
+            """
+            parser = _Lark(grammar)
+            d = parser.serialize()
+            parser2 = Lark.deserialize(d, {}, {})
+            self.assertEqual(parser2.parse('ABC'), Tree('start', [Tree('b', [])]) )
+
+            namespace = {'Rule': Rule, 'TerminalDef': TerminalDef}
+            d, m = parser.memo_serialize(namespace.values())
+            parser3 = Lark.deserialize(d, namespace, m)
+            self.assertEqual(parser3.parse('ABC'), Tree('start', [Tree('b', [])]) )
+
 
 
     _NAME = "Test" + PARSER.capitalize() + LEXER.capitalize()
