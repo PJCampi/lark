@@ -12,7 +12,7 @@ from .parse_tree_builder import ParseTreeBuilder
 from .parser_frontends import LALR_TraditionalLexer
 from .common import LexerConf, ParserConf
 from .grammar import RuleOptions, Rule, Terminal, NonTerminal, Symbol
-from .utils import classify, suppress, dedup_list
+from .utils import classify, suppress, dedup_list, Str
 from .exceptions import GrammarError, UnexpectedCharacters, UnexpectedToken
 
 from .tree import Tree, SlottedTree as ST
@@ -90,7 +90,7 @@ TERMINALS = {
     '_IGNORE': r'%ignore',
     '_DECLARE': r'%declare',
     '_IMPORT': r'%import',
-    'NUMBER': r'\d+',
+    'NUMBER': r'[+-]?\d+',
 }
 
 RULES = {
@@ -196,7 +196,7 @@ class EBNF_to_BNF(Transformer_InPlace):
                 mn = mx = int(args[0])
             else:
                 mn, mx = map(int, args)
-                if mx < mn:
+                if mx < mn or mn < 0:
                     raise GrammarError("Bad Range for %s (%d..%d isn't allowed)" % (rule, mn, mx))
             return ST('expansions', [ST('expansion', [rule] * n) for n in range(mn, mx+1)])
         assert False, op
@@ -205,7 +205,7 @@ class EBNF_to_BNF(Transformer_InPlace):
         keep_all_tokens = self.rule_options and self.rule_options.keep_all_tokens
 
         def will_not_get_removed(sym):
-            if isinstance(sym, NonTerminal): 
+            if isinstance(sym, NonTerminal):
                 return not sym.name.startswith('_')
             if isinstance(sym, Terminal):
                 return keep_all_tokens or not sym.filter_out
@@ -451,9 +451,9 @@ class PrepareSymbols(Transformer_InPlace):
         if isinstance(v, Tree):
             return v
         elif v.type == 'RULE':
-            return NonTerminal(v.value)
+            return NonTerminal(Str(v.value))
         elif v.type == 'TERMINAL':
-            return Terminal(v.value, filter_out=v.startswith('_'))
+            return Terminal(Str(v.value), filter_out=v.startswith('_'))
         assert False
 
 def _choice_of_rules(rules):
@@ -465,7 +465,7 @@ class Grammar:
         self.rule_defs = rule_defs
         self.ignore = ignore
 
-    def compile(self):
+    def compile(self, start):
         # We change the trees in-place (to support huge grammars)
         # So deepcopy allows calling compile more than once.
         term_defs = deepcopy(list(self.term_defs))
@@ -511,16 +511,16 @@ class Grammar:
 
         simplify_rule = SimplifyRule_Visitor()
         compiled_rules = []
-        for i, rule_content in enumerate(rules):
+        for rule_content in rules:
             name, tree, options = rule_content
             simplify_rule.visit(tree)
             expansions = rule_tree_to_text.transform(tree)
 
-            for expansion, alias in expansions:
+            for i, (expansion, alias) in enumerate(expansions):
                 if alias and name.startswith('_'):
                     raise GrammarError("Rule %s is marked for expansion (it starts with an underscore) and isn't allowed to have aliases (alias=%s)" % (name, alias))
 
-                empty_indices = [x==_EMPTY for i, x in enumerate(expansion)]
+                empty_indices = [x==_EMPTY for x in expansion]
                 if any(empty_indices):
                     exp_options = copy(options) if options else RuleOptions()
                     exp_options.empty_indices = empty_indices
@@ -538,13 +538,26 @@ class Grammar:
             for dups in duplicates.values():
                 if len(dups) > 1:
                     if dups[0].expansion:
-                        raise GrammarError("Rules defined twice: %s" % ', '.join(str(i) for i in duplicates))
+                        raise GrammarError("Rules defined twice: %s\n\n(Might happen due to colliding expansion of optionals: [] or ?)" % ''.join('\n  * %s' % i for i in dups))
 
                     # Empty rule; assert all other attributes are equal
                     assert len({(r.alias, r.order, r.options) for r in dups}) == len(dups)
 
             # Remove duplicates
             compiled_rules = list(set(compiled_rules))
+
+
+        # Filter out unused rules
+        while True:
+            c = len(compiled_rules)
+            used_rules = {s for r in compiled_rules
+                                for s in r.expansion
+                                if isinstance(s, NonTerminal)
+                                and s != r.origin}
+            used_rules |= {NonTerminal(s) for s in start}
+            compiled_rules = [r for r in compiled_rules if r.origin in used_rules]
+            if len(compiled_rules) == c:
+                break
 
         # Filter out unused terminals
         used_terms = {t.name for r in compiled_rules
@@ -678,7 +691,7 @@ class GrammarLoader:
         callback = ParseTreeBuilder(rules, ST).create_callback()
         lexer_conf = LexerConf(terminals, ['WS', 'COMMENT'])
 
-        parser_conf = ParserConf(rules, callback, 'start')
+        parser_conf = ParserConf(rules, callback, ['start'])
         self.parser = LALR_TraditionalLexer(lexer_conf, parser_conf)
 
         self.canonize_tree = CanonizeTree()

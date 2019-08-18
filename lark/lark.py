@@ -43,7 +43,7 @@ class LarkOptions(Serialize):
         keep_all_tokens - Don't automagically remove "punctuation" tokens (default: False)
         cache_grammar - Cache the Lark grammar (Default: False)
         postlex - Lexer post-processing (Default: None) Only works with the standard and contextual lexers.
-        start - The start symbol (Default: start)
+        start - The start symbol, either a string, or a list of strings for multiple possible starts (Default: "start")
         profile - Measure run-time usage in Lark. Read results from the profiler proprety (Default: False)
         priority - How priorities should be evaluated - auto, none, normal, invert (Default: auto)
         propagate_positions - Propagates [line, column, end_line, end_column] attributes into all tree branches.
@@ -84,6 +84,9 @@ class LarkOptions(Serialize):
                 value = default
 
             options[name] = value
+
+        if isinstance(options['start'], str):
+            options['start'] = [options['start']]
 
         self.__dict__['options'] = options
 
@@ -200,7 +203,9 @@ class Lark(Serialize):
         self.grammar = load_grammar(grammar, self.source)
 
         # Compile the EBNF grammar into BNF
-        self.terminals, self.rules, self.ignore_tokens = self.grammar.compile()
+        self.terminals, self.rules, self.ignore_tokens = self.grammar.compile(self.options.start)
+
+        self._terminals_dict = {t.name:t for t in self.terminals}
 
         # If the user asked to invert the priorities, negate them all here.
         # This replaces the old 'resolve__antiscore_sum' option.
@@ -287,8 +292,17 @@ class Lark(Serialize):
             return self.options.postlex.process(stream)
         return stream
 
-    def parse(self, text):
-        "Parse the given text, according to the options provided. Returns a tree, unless specified otherwise."
-        return self.parser.parse(text)
+    def get_terminal(self, name):
+        "Get information about a terminal"
+        return self._terminals_dict[name]
+
+    def parse(self, text, start=None):
+        """Parse the given text, according to the options provided.
+
+        The 'start' parameter is required if Lark was given multiple possible start symbols (using the start option).
+
+        Returns a tree, unless specified otherwise.
+        """
+        return self.parser.parse(text, start=start)
 
 ###}

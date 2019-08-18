@@ -8,7 +8,6 @@ from .exceptions import UnexpectedCharacters, LexError
 ###{standalone
 
 class Pattern(Serialize):
-    __serialize_fields__ = 'value', 'flags'
 
     def __init__(self, value, flags=()):
         self.value = value
@@ -41,6 +40,10 @@ class Pattern(Serialize):
 
 
 class PatternStr(Pattern):
+    __serialize_fields__ = 'value', 'flags'
+
+    type = "str"
+    
     def to_regexp(self):
         return self._get_flags(re.escape(self.value))
 
@@ -50,15 +53,25 @@ class PatternStr(Pattern):
     max_width = min_width
 
 class PatternRE(Pattern):
+    __serialize_fields__ = 'value', 'flags', '_width'
+
+    type = "re"
+
     def to_regexp(self):
         return self._get_flags(self.value)
 
+    _width = None
+    def _get_width(self):
+        if self._width is None:
+            self._width = get_regexp_width(self.to_regexp())
+        return self._width
+
     @property
     def min_width(self):
-        return get_regexp_width(self.to_regexp())[0]
+        return self._get_width()[0]
     @property
     def max_width(self):
-        return get_regexp_width(self.to_regexp())[1]
+        return self._get_width()[1]
 
 
 class TerminalDef(Serialize):
@@ -149,6 +162,7 @@ class _Lex:
         newline_types = frozenset(newline_types)
         ignore_types = frozenset(ignore_types)
         line_ctr = LineCounter()
+        last_token = None
 
         while line_ctr.char_pos < len(stream):
             lexer = self.lexer
@@ -166,6 +180,7 @@ class _Lex:
                         t = lexer.callback[t.type](t)
                         if not isinstance(t, Token):
                             raise ValueError("Callbacks must return a token (returned %r)" % t)
+                    last_token = t
                     yield t
                 else:
                     if type_ in lexer.callback:
@@ -180,7 +195,7 @@ class _Lex:
                 break
             else:
                 allowed = {v for m, tfi in lexer.mres for v in tfi.values()}
-                raise UnexpectedCharacters(stream, line_ctr.char_pos, line_ctr.line, line_ctr.column, allowed=allowed, state=self.state)
+                raise UnexpectedCharacters(stream, line_ctr.char_pos, line_ctr.line, line_ctr.column, allowed=allowed, state=self.state, token_history=last_token and [last_token])
 
 
 class UnlessCallback:
@@ -258,8 +273,9 @@ def _regexp_has_newline(r):
         - escaped newline (\\n)
         - anything but ([^...])
         - any-char (.) when the flag (?s) exists
+        - spaces (\s)
     """
-    return '\n' in r or '\\n' in r or '[^' in r or ('(?s' in r and '.' in r)
+    return '\n' in r or '\\n' in r or '\\s' in r or '[^' in r or ('(?s' in r and '.' in r)
 
 class Lexer(object):
     """Lexer interface
